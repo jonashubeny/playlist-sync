@@ -1,0 +1,17 @@
+# Na jonas-server:  cd server && docker compose up -d
+# Token dej do souboru .env vedle tohohle souboru:  SEZNAM_TOKEN=...
+services:
+  seznam:
+    image: node:22-alpine
+    container_name: playlist-seznam
+    restart: unless-stopped
+    working_dir: /app
+    command: node seznam-server.js
+    environment:
+      SEZNAM_TOKEN: ${SEZNAM_TOKEN:?doplň SEZNAM_TOKEN do .env}
+      DATA_SLOZKA: /data
+    volumes:
+      - ./seznam-server.js:/app/seznam-server.js:ro
+      - ./data:/data
+    ports:
+      - "3456:3456"

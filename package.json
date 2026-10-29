@@ -1,0 +1,16 @@
+{
+  "name": "playlist-sync",
+  "version": "1.0.0",
+  "description": "Syncs playlists",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "node-id3": "^0.2.9",
+    "spotify-url-info": "^3.3.3"
+  }
+}
