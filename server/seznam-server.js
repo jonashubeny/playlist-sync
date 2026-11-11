@@ -2,8 +2,7 @@
 // Spouští se na jonas-server:  node seznam-server.js
 //
 // Nastavení přes proměnné prostředí:
-//   SEZNAM_TOKEN  - tajný token, bez něj server nic nevydá (povinné)
-//   PORT          - port, výchozí 3456
+//   PORT         - port, výchozí 3456
 //   DATA_SLOZKA   - kam ukládat seznam.json, výchozí složka vedle skriptu
 //
 // API:
@@ -12,17 +11,13 @@
 
 import { createServer } from "node:http";
 import { readFile, writeFile, rename, mkdir } from "node:fs/promises";
+import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
 
 const PORT = Number(process.env.PORT ?? 3456);
-const TOKEN = process.env.SEZNAM_TOKEN;
 const DATA_SLOZKA = process.env.DATA_SLOZKA ?? import.meta.dirname;
 const SEZNAM_JSON = path.join(DATA_SLOZKA, "seznam.json");
-
-if (!TOKEN) {
-    console.error("Chybí SEZNAM_TOKEN. Spusť třeba: SEZNAM_TOKEN=tajneslovo node seznam-server.js");
-    process.exit(1);
-}
+const TOKENY_JSON = path.join(DATA_SLOZKA, "tokeny.json");
 
 await mkdir(DATA_SLOZKA, { recursive: true });
 
@@ -39,6 +34,19 @@ async function ulozSeznam(seznam) {
     const docasny = SEZNAM_JSON + ".tmp";
     await writeFile(docasny, JSON.stringify(seznam, null, 2), "utf8");
     await rename(docasny, SEZNAM_JSON);
+}
+
+function hashTokenu(token) {
+    return createHash("sha256").update(token).digest("hex");
+}
+
+// cte se pri kazdem pozadavky, aby novy uzivatel nepotreboval restart
+async function nactiTokeny() {
+    try {
+        return JSON.parse(await readFile(TOKENY_JSON, "utf8"));
+    } catch {
+        return {};
+    }
 }
 
 // pisnicka je v seznamu, kdyz sedi Spotify ID nebo nazev souboru
@@ -62,7 +70,6 @@ function pridej(seznam, nove) {
             interpret: p.interpret ?? null,
             delka: p.delka ?? null,
             soubor: p.soubor,
-            pridano: new Date().toISOString(),
             odkud: p.odkud ?? null,
         };
         seznam.push(pisnicka);
@@ -98,10 +105,6 @@ const server = createServer((req, res) => {
 });
 
 async function zpracuj(req, res) {
-    if (req.headers.authorization !== `Bearer ${TOKEN}`) {
-        return odpovez(res, 401, { chyba: "špatný nebo chybějící token" });
-    }
-
     const { pathname } = new URL(req.url, "http://localhost");
 
     if (pathname === "/pisnicky" && req.method === "GET") {
