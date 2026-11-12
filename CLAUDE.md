@@ -1,45 +1,74 @@
 # playlist-sync
 
-Node.js CLI, který stáhne písničky ze Spotify playlistů jako mp3 (přes `yt-dlp`
-z YouTube) a otaguje je (Deezer, záložně iTunes). Uživatelská dokumentace je
-v `README.md`, tady jsou jen věci pro práci na kódu.
+CLI v C++, který stáhne písničky ze Spotify playlistů jako mp3 (přes `yt-dlp`
+z YouTube) a otaguje je (Deezer, záložně iTunes). Server se sdíleným seznamem
+zůstává v Node.js. Uživatelská dokumentace je v `README.md`, tady jsou jen
+věci pro práci na kódu.
 
 ## Struktura
 
-- `playlist-sync.js` je celý klient v jednom souboru (ESM, `"type": "module"`),
-  spouští se `node playlist-sync.js [přepínače]`. Přepínače parsuje
-  `parseArgs` z `node:util`. Bez přepínačů = stahování z playlistů.
+- `playlist-sync.cpp` je celý klient v jednom souboru (C++20), části oddělené
+  komentáři `// ---------- … ----------`. Sestavení `cmake -B build &&
+  cmake --build build`, binárka `./playlist-sync` vznikne v kořeni projektu
+  (`RUNTIME_OUTPUT_DIRECTORY` v `CMakeLists.txt`). Bez přepínačů = stahování
+  z playlistů.
+- Binárka hledá `config.json`, `playlist.json` a `preskocit.txt` ve své
+  složce (`/proc/self/exe`, takže symlink funguje, kopie ne).
+- `playlist-sync.js` + `package.json` je původní Node verze, ponechaná pro
+  porovnání. C++ verze se proti ní ověřila: stejné `playlist.json` (bajtově),
+  stejné názvy souborů, stejné výpisy a hodnoty tagů. Až ji uživatel schválí
+  ke smazání, smazat i `package.json`, `package-lock.json` a odkazy v README.
 - `server/seznam-server.js` je server se sdíleným seznamem písniček (čistý
   `node:http`, bez Express), `server/docker-compose.yml` ho pouští
   v kontejneru `node:22-alpine` na jonas-serveru. Viz „Aktuální práce“.
 - `config.json` (vzor `config-example.json`): `playlist_url` (string nebo pole)
   a `slozka_mp3` (`~` se rozbalí přes `rozbalCestu`).
 - `playlist.json`: poslední načtený obsah playlistů (`id`, `nazev`,
-  `interpret`, `delka`). `stazeno.json` je pozůstatek, kód ho nepoužívá.
-- Závislosti: `spotify-url-info`, `node-id3`. Externí programy: `yt-dlp`,
-  `ffmpeg`/`ffprobe`. Node 20.11+ (kvůli `import.meta.dirname`).
-- Testy nejsou, ověřuje se ručně, typicky přes `-n` / `--dry-run`.
+  `interpret`, `delka`). Zapisuje se přes `nlohmann::ordered_json` a celá
+  čísla bez `.0` (`cisloDoJson`), aby byl stejný jako z Node.
+- Knihovny: libcurl (HTTP), TagLib 2 (ID3v2.3), utf8proc (NFKD, malá písmena),
+  nlohmann/json. Na Fedoře `gcc-c++ cmake libcurl-devel taglib-devel
+  utf8proc-devel json-devel`. Kompilátor s `std::format` (GCC 13+).
+  Externí programy: `yt-dlp`, `ffmpeg`/`ffprobe`.
+- Testy nejsou, ověřuje se ručně, typicky přes `-n` / `--dry-run`. Na
+  porovnání s Node verzí pustit obě nad stejnou složkou ve scratchpadu
+  (Node verze potřebuje `npm ci` v kopii).
 
 ## Konvence
 
 - Identifikátory, výpisy i komentáře česky. Komentáře bez diakritiky,
   texty pro uživatele s diakritikou.
-- 4 mezery, dvojité uvozovky, středníky, `node:` importy, `fs/promises`.
-- Async všude, smyčky přes `for...of` + `await` (stahuje se postupně).
-- Chyba jedné písničky nesmí shodit celý běh: vypsat a pokračovat.
+- 4 mezery, `std::format` + `vypis(...)` / `vypisChybu(...)` místo `printf`.
+- Do JSON z webu se sahá jen přes `polozka(j, "klic")`, `jakoText`,
+  `jakoCislo`, `neprazdnyText` (nikdy nehází, chybějící klíč = `nullopt`).
+- Programy se spouštějí přes `spust(program, argumenty)` bez shellu
+  (`posix_spawnp`), vrací `{ kod, vystup, chyby }`.
+- Stahuje se postupně, jedna písnička po druhé.
+- Chyba jedné písničky nesmí shodit celý běh: vypsat a pokračovat
+  (`otagujBezpecne` chytá výjimky z tagování).
 
-## Důležité funkce v `playlist-sync.js`
+## Důležité funkce v `playlist-sync.cpp`
 
 - `jmenoSouboru(p)`: `"Interpret - Název"` bez `.mp3`, zakázané znaky
-  `/ \ : * ? " < > |` nahrazuje `_`. **Podle názvu souboru se pozná, jestli
+  `/ \ : * ? " < > |` nahrazuje `_`, ořezává přes `orizni` (stejné znaky jako
+  JS `trim()`, včetně Unicode mezer). **Podle názvu souboru se pozná, jestli
   písnička už je stažená**, takže každá změna tady změní porovnávání
   s existujícími soubory na všech zařízeních.
 - `pisnickaZNazvu(jmeno)`: opačný směr, z `"Interpret - Název.mp3"` udělá
-  `{ nazev, interpret, delka }`; bez ` - ` dá celé jméno do `nazev`
-  a prázdný `interpret`.
-- `nactiPlaylist()`, `stahniMp3(p)` (vrací název souboru nebo `null`),
-  `otaguj(soubor, p)`, `mp3VeSlozce(slozka)` (rekurzivně, plné cesty).
-- Hlavní program je na konci souboru (větev `jenTagovat` vs. stahování).
+  `Pisnicka{ id, nazev, interpret, delka }`; bez ` - ` dá celé jméno do
+  `nazev` a prázdný `interpret`.
+- `nactiSkladby(adresa)`: náhrada `spotify-url-info`, čte JSON z bloku
+  `__NEXT_DATA__` na `open.spotify.com/embed/<typ>/<id>`. Když Spotify změní
+  stránku, rozbije se tady.
+- `nactiPlaylist()`, `stahniMp3(p)` (vrací název souboru nebo `nullopt`,
+  `%` v šabloně `yt-dlp` escapuje na `%%`), `otaguj(soubor, p)`,
+  `mp3VeSlozce(slozka)` (rekurzivně, plné cesty).
+- `zapisTagy`: prázdná hodnota = rámec nechat beze změny (jako `undefined`
+  v node-id3). Ukládá ID3v2.3, rok jako `TDRC`, TagLib z něj udělá `TYER`.
+- Přepínače parsuje `nactiPrepinace` se stejnými pravidly jako `parseArgs`
+  z Node (skupiny `-nf`, `--dir=X`, `--`, hodnota začínající `-` = chyba).
+- Hlavní program je `hlavni(volby)` na konci (větev `jenTagovat` vs.
+  stahování), `main` jen načte přepínače a chytá výjimky.
 
 ## Aktuální práce: sdílený seznam písniček na serveru
 
@@ -89,7 +118,7 @@ Záznam v `seznam.json` (české klíče jako v `playlist.json`):
 `soubor` je klíč pro porovnání (vždy přes `.toLowerCase()`). `id` je Spotify
 ID nebo `null`. `odkud` je `"spotify"` nebo `"local"`.
 
-### Klient (`playlist-sync.js`)
+### Klient (`playlist-sync.cpp`)
 
 Přepínače:
 
@@ -105,7 +134,7 @@ Pořadí běžného běhu:
 1. Spotify → stáhnout nové (jako dnes).
 2. Je-li v configu `server`: `GET /pisnicky`.
 3. S `--server`: záznamy, jejichž `soubor` lokálně chybí, stáhnout
-   a otagovat. Postupně (`for...of` + `await`), chyba jedné písničky =
+   a otagovat. Postupně, jedna po druhé, chyba jedné písničky =
    vypsat a pokračovat.
 4. Lokální `.mp3`, které na serveru nejsou, poslat **jedním** `POST`.
    Když název souboru odpovídá písničce z `playlist.json`, poslat ji
@@ -151,6 +180,4 @@ webové rozhraní.
 
 ## Pozor v repu
 
-- README tvrdí, že `config.json` a `playlist.json` jsou v `.gitignore`, ale
-  `.gitignore` neexistuje a `config.json` i `node_modules/` jsou commitnuté.
 - `deno.lock` s projektem nesouvisí.

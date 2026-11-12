@@ -1,3 +1,5 @@
 playlist.json
 config.json
 node_modules/
+/build/
+/playlist-sync
