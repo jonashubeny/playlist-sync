@@ -2,8 +2,11 @@
 // Spouští se na jonas-server:  node seznam-server.js
 //
 // Nastavení přes proměnné prostředí:
-//   PORT         - port, výchozí 3456
-//   DATA_SLOZKA   - kam ukládat seznam.json, výchozí složka vedle skriptu
+//   PORT          - port, výchozí 3456
+//   DATA_SLOZKA   - kam ukládat seznam.json a tokeny.json, výchozí složka vedle skriptu
+//
+// Uživatelé: tokeny.json v DATA_SLOZKA (hash tokenu -> jméno),
+//   nový uživatel:  node seznam-server.js --novy-token JMENO
 //
 // API:
 //   GET  /pisnicky          -> celý seznam (pole písniček)
@@ -12,6 +15,7 @@
 import { createServer } from "node:http";
 import { readFile, writeFile, rename, mkdir } from "node:fs/promises";
 import { createHash, randomBytes } from "node:crypto";
+import { parseArgs } from "node:util";
 import path from "node:path";
 
 const PORT = Number(process.env.PORT ?? 3456);
@@ -24,28 +28,30 @@ await mkdir(DATA_SLOZKA, { recursive: true });
 async function nactiSeznam() {
     try {
         return JSON.parse(await readFile(SEZNAM_JSON, "utf8"));
-    } catch {
-        return [];
+    } catch (chyba) {
+        if (chyba.code === "ENOENT") return [];
+        throw chyba;
     }
 }
 
-// zapis pres docasny soubor, aby se pri vypadku proudu nerozbil seznam napul
-async function ulozSeznam(seznam) {
-    const docasny = SEZNAM_JSON + ".tmp";
-    await writeFile(docasny, JSON.stringify(seznam, null, 2), "utf8");
-    await rename(docasny, SEZNAM_JSON);
+// zapis pres docasny soubor, aby se pri vypadku proudu nerozbil soubor napul
+async function ulozJson(soubor, data) {
+    const docasny = soubor + ".tmp";
+    await writeFile(docasny, JSON.stringify(data, null, 2), "utf8");
+    await rename(docasny, soubor);
 }
 
 function hashTokenu(token) {
     return createHash("sha256").update(token).digest("hex");
 }
 
-// cte se pri kazdem pozadavky, aby novy uzivatel nepotreboval restart
+// cte se pri kazdem pozadavku, aby novy uzivatel nepotreboval restart
 async function nactiTokeny() {
     try {
         return JSON.parse(await readFile(TOKENY_JSON, "utf8"));
-    } catch {
-        return {};
+    } catch (chyba) {
+        if (chyba.code === "ENOENT") return {};
+        throw chyba;
     }
 }
 
@@ -94,6 +100,34 @@ async function prectiTelo(req) {
     return JSON.parse(text);
 }
 
+// node seznam-server.js --novy-token JMENO: vytvori token, vypise ho a skonci,
+// server se v tom pripade nespousti
+let prepinace;
+try {
+    ({ values: prepinace } = parseArgs({
+        options: { "novy-token": { type: "string" } },
+    }));
+} catch (chyba) {
+    console.error(chyba.message);
+    console.error("Použití: node seznam-server.js [--novy-token JMENO]");
+    process.exit(1);
+}
+
+if (prepinace["novy-token"] !== undefined) {
+    const jmeno = prepinace["novy-token"].trim();
+    if (!jmeno) {
+        console.error("Zadej jméno: node seznam-server.js --novy-token JMENO");
+        process.exit(1);
+    }
+    const token = randomBytes(32).toString("base64url");
+    const tokeny = await nactiTokeny();
+    tokeny[hashTokenu(token)] = jmeno;
+    await ulozJson(TOKENY_JSON, tokeny);
+    console.log(`Token pro uživatele ${jmeno} (víckrát se nezobrazí, ulož si ho):`);
+    console.log(token);
+    process.exit(0);
+}
+
 // pozadavky zpracovavame jeden po druhem, aby se dva soucasne POSTy neprepsaly
 let fronta = Promise.resolve();
 
@@ -124,7 +158,7 @@ async function zpracuj(req, res) {
         const seznam = await nactiSeznam();
         const pridane = pridej(seznam, nove);
         if (pridane.length > 0) {
-            await ulozSeznam(seznam);
+            await ulozJson(SEZNAM_JSON, seznam);
             console.log(`Přidáno ${pridane.length}: ${pridane.map((p) => p.soubor).join(", ")}`);
         }
         return odpovez(res, 200, { pridano: pridane.length, celkem: seznam.length });
